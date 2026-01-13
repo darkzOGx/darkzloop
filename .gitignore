@@ -1,0 +1,11 @@
+
+# Valid .gitignore for Windows/Python
+nul
+__pycache__/
+*.pyc
+.env
+.venv
+.pytest_cache/
+dist/
+build/
+*.egg-info/

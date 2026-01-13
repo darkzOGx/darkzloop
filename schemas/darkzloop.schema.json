@@ -1,0 +1,235 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+    "ActionType": {
+      "type": "string",
+      "enum": [
+        "read_file",
+        "write_file",
+        "modify_file",
+        "run_command",
+        "search_code",
+        "ask_human",
+        "commit",
+        "no_op"
+      ],
+      "description": "Valid action types the agent can take"
+    },
+    
+    "TaskStatus": {
+      "type": "string",
+      "enum": ["pending", "in_progress", "complete", "failed", "blocked", "skipped"],
+      "description": "Status of a task in the plan"
+    },
+    
+    "LoopState": {
+      "type": "string",
+      "enum": ["init", "plan", "execute", "observe", "critique", "checkpoint", "complete", "failed", "blocked"],
+      "description": "Valid states in the FSM"
+    },
+    
+    "TaskDefinition": {
+      "type": "object",
+      "required": ["id", "description", "files_to_modify", "files_to_create", "reference_files", "spec_sections", "acceptance_criteria"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Task identifier (e.g., '1.1')"
+        },
+        "description": {
+          "type": "string",
+          "description": "Brief description of the task"
+        },
+        "files_to_modify": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Existing files to modify"
+        },
+        "files_to_create": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "New files to create"
+        },
+        "reference_files": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Pattern files to follow"
+        },
+        "spec_sections": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Relevant spec sections"
+        },
+        "acceptance_criteria": {
+          "type": "string",
+          "description": "How to verify task completion"
+        },
+        "dependencies": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Task IDs this depends on"
+        },
+        "keywords": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Key domain terms for this task"
+        },
+        "semantic_expansion": {
+          "type": "object",
+          "description": "Synonym clusters for vocabulary gap bridging",
+          "additionalProperties": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "examples": [
+            {
+              "billing": ["invoice", "payment", "subscription", "charge"],
+              "user": ["account", "profile", "identity"]
+            }
+          ]
+        },
+        "search_strategy": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Generated search commands using synonym clusters"
+        }
+      }
+    },
+    
+    "AgentAction": {
+      "type": "object",
+      "required": ["action", "target"],
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/ActionType"
+        },
+        "target": {
+          "type": "string",
+          "description": "File path or command"
+        },
+        "content": {
+          "type": "string",
+          "description": "Content for write/modify actions"
+        },
+        "reason": {
+          "type": "string",
+          "description": "Why this action is being taken"
+        }
+      }
+    },
+    
+    "ExecutionResult": {
+      "type": "object",
+      "required": ["action", "success", "output"],
+      "properties": {
+        "action": {
+          "$ref": "#/definitions/AgentAction"
+        },
+        "success": {
+          "type": "boolean"
+        },
+        "output": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "error": {
+          "type": ["string", "null"]
+        },
+        "duration_ms": {
+          "type": "integer"
+        }
+      }
+    },
+    
+    "Observation": {
+      "type": "object",
+      "required": ["execution_succeeded", "tests_passed", "files_changed", "issues_found", "next_step_suggestion", "confidence"],
+      "properties": {
+        "execution_succeeded": {"type": "boolean"},
+        "tests_passed": {"type": "boolean"},
+        "files_changed": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "issues_found": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "next_step_suggestion": {"type": "string"},
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    
+    "CritiqueResult": {
+      "type": "object",
+      "required": ["matches_spec", "matches_goal", "issues", "should_retry", "should_proceed", "reasoning"],
+      "properties": {
+        "matches_spec": {"type": "boolean"},
+        "matches_goal": {"type": "boolean"},
+        "issues": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "should_retry": {"type": "boolean"},
+        "should_proceed": {"type": "boolean"},
+        "reasoning": {"type": "string"}
+      }
+    },
+    
+    "CheckpointData": {
+      "type": "object",
+      "required": ["iteration", "task_id", "task_status", "summary"],
+      "properties": {
+        "iteration": {"type": "integer"},
+        "task_id": {"type": "string"},
+        "task_status": {"$ref": "#/definitions/TaskStatus"},
+        "commit_hash": {"type": ["string", "null"]},
+        "summary": {"type": "string"},
+        "timestamp": {"type": "string", "format": "date-time"}
+      }
+    },
+    
+    "LoopInput": {
+      "type": "object",
+      "required": ["task", "fsm_state", "valid_actions", "iteration", "history_summary", "goal_reminder"],
+      "properties": {
+        "task": {"$ref": "#/definitions/TaskDefinition"},
+        "fsm_state": {"$ref": "#/definitions/LoopState"},
+        "valid_actions": {
+          "type": "array",
+          "items": {"$ref": "#/definitions/LoopState"}
+        },
+        "iteration": {"type": "integer"},
+        "history_summary": {"type": "string"},
+        "goal_reminder": {"type": "string"}
+      }
+    },
+    
+    "FSMState": {
+      "type": "object",
+      "required": ["current_state", "iteration"],
+      "properties": {
+        "current_state": {"$ref": "#/definitions/LoopState"},
+        "iteration": {"type": "integer"},
+        "consecutive_failures": {"type": "integer"},
+        "transitions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "from": {"$ref": "#/definitions/LoopState"},
+              "to": {"$ref": "#/definitions/LoopState"},
+              "timestamp": {"type": "string"},
+              "reason": {"type": "string"},
+              "iteration": {"type": "integer"}
+            }
+          }
+        }
+      }
+    }
+  }
+}

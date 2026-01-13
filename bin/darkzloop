@@ -1,0 +1,866 @@
+#!/usr/bin/env python3
+"""
+darkzloop - Autonomous coding loop orchestration
+
+Usage:
+    darkzloop init [--force]
+    darkzloop spec [--edit]
+    darkzloop plan [--edit]
+    darkzloop run [--attended | --unattended] [--max-iterations N]
+    darkzloop status
+    darkzloop validate
+    darkzloop --help
+    darkzloop --version
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+from datetime import datetime
+from pathlib import Path
+
+__version__ = "0.1.0"
+
+# ANSI colors
+class Colors:
+    RED = '\033[0;31m'
+    GREEN = '\033[0;32m'
+    YELLOW = '\033[1;33m'
+    BLUE = '\033[0;34m'
+    CYAN = '\033[0;36m'
+    BOLD = '\033[1m'
+    NC = '\033[0m'  # No Color
+
+def color(text: str, c: str) -> str:
+    """Wrap text in color codes."""
+    if not sys.stdout.isatty():
+        return text
+    return f"{c}{text}{Colors.NC}"
+
+def get_templates_dir() -> Path:
+    """Get the templates directory."""
+    # Check relative to script location first
+    script_dir = Path(__file__).parent.parent
+    templates = script_dir / "templates"
+    if templates.exists():
+        return templates
+    
+    # Fall back to installed location
+    import importlib.resources
+    try:
+        return Path(importlib.resources.files("darkzloop") / "templates")
+    except:
+        return templates
+
+def detect_project_type(project_dir: Path) -> dict:
+    """Detect project type and suggest appropriate commands."""
+    config = {
+        "language": "unknown",
+        "test": "echo 'No test command configured'",
+        "format_check": "",
+        "format_fix": "",
+        "lint": "",
+        "type_check": "",
+    }
+
+    # Rust
+    if (project_dir / "Cargo.toml").exists():
+        config.update({
+            "language": "rust",
+            "test": "cargo test",
+            "format_check": "cargo fmt --check",
+            "format_fix": "cargo fmt",
+            "lint": "cargo clippy -- -D warnings",
+        })
+
+    # Node.js / TypeScript
+    elif (project_dir / "package.json").exists():
+        is_ts = (project_dir / "tsconfig.json").exists()
+        config["language"] = "typescript" if is_ts else "javascript"
+        
+        try:
+            with open(project_dir / "package.json") as f:
+                pkg = json.load(f)
+            scripts = pkg.get("scripts", {})
+            config["test"] = "npm test" if "test" in scripts else "echo 'Add test script'"
+        except:
+            config["test"] = "npm test"
+        
+        config["format_check"] = "npx prettier --check ."
+        config["format_fix"] = "npx prettier --write ."
+        config["lint"] = "npx eslint ."
+        if is_ts:
+            config["type_check"] = "npx tsc --noEmit"
+
+    # Python
+    elif any((project_dir / f).exists() for f in ["pyproject.toml", "setup.py", "requirements.txt"]):
+        config.update({
+            "language": "python",
+            "test": "pytest",
+            "format_check": "black --check .",
+            "format_fix": "black .",
+            "lint": "ruff check .",
+            "type_check": "mypy .",
+        })
+
+    # Go
+    elif (project_dir / "go.mod").exists():
+        config.update({
+            "language": "go",
+            "test": "go test ./...",
+            "format_check": "test -z $(gofmt -l .)",
+            "format_fix": "gofmt -w .",
+            "lint": "golangci-lint run",
+        })
+
+    return config
+
+
+def cmd_init(args):
+    """Initialize darkzloop in the current directory."""
+    project_dir = Path.cwd()
+    templates_dir = get_templates_dir()
+    
+    print(f"\n{color('🔄 Initializing darkzloop', Colors.BOLD)}\n")
+    
+    # Detect project
+    detected = detect_project_type(project_dir)
+    print(f"Detected: {color(detected['language'], Colors.CYAN)}")
+    print(f"  Test: {detected['test']}")
+    if detected['format_check']:
+        print(f"  Format: {detected['format_check']}")
+    if detected['lint']:
+        print(f"  Lint: {detected['lint']}")
+    print()
+
+    # Create config
+    config_path = project_dir / "darkzloop.json"
+    if config_path.exists() and not args.force:
+        print(f"  {color('⏭️', Colors.YELLOW)}  darkzloop.json exists (use --force to overwrite)")
+    else:
+        config = {
+            "version": "1.0",
+            "language": detected["language"],
+            "commands": {
+                "test": detected["test"],
+                "format_check": detected["format_check"],
+                "format_fix": detected["format_fix"],
+                "lint": detected["lint"],
+                "type_check": detected["type_check"],
+            },
+            "gates": {
+                "require_tests": True,
+                "require_format": bool(detected["format_check"]),
+                "require_lint": bool(detected["lint"]),
+                "require_type_check": False,
+            },
+            "loop": {
+                "max_consecutive_failures": 3,
+                "auto_commit": True,
+                "auto_push": False,
+            }
+        }
+        with open(config_path, "w") as f:
+            json.dump(config, f, indent=2)
+        print(f"  {color('✅', Colors.GREEN)} Created darkzloop.json")
+
+    # Copy templates
+    templates = [
+        ("SPEC.md", "DARKZLOOP_SPEC.md"),
+        ("PLAN.md", "DARKZLOOP_PLAN.md"),
+        ("prompts/iteration.md", "darkzloop-prompt.md"),
+    ]
+    
+    for src_name, dst_name in templates:
+        src = templates_dir / src_name
+        dst = project_dir / dst_name
+        
+        if dst.exists() and not args.force:
+            print(f"  {color('⏭️', Colors.YELLOW)}  {dst_name} exists")
+        elif src.exists():
+            dst.write_text(src.read_text())
+            print(f"  {color('✅', Colors.GREEN)} Created {dst_name}")
+        else:
+            # Create default template inline if file not found
+            if "SPEC" in dst_name:
+                create_default_spec(dst)
+                print(f"  {color('✅', Colors.GREEN)} Created {dst_name}")
+            elif "PLAN" in dst_name:
+                create_default_plan(dst)
+                print(f"  {color('✅', Colors.GREEN)} Created {dst_name}")
+
+    print(f"\n{color('✨ Initialized!', Colors.GREEN)}\n")
+    print("Next steps:")
+    print(f"  1. Edit {color('DARKZLOOP_SPEC.md', Colors.CYAN)} with your specification")
+    print(f"  2. Edit {color('DARKZLOOP_PLAN.md', Colors.CYAN)} with implementation tasks")
+    print(f"  3. Run: {color('darkzloop run --attended', Colors.CYAN)}")
+    print()
+
+
+def create_default_spec(path: Path):
+    """Create default spec template."""
+    content = '''# [Feature Name] Spec
+
+## Objective
+
+[One paragraph: what are you building and why]
+
+## Keywords & Synonyms
+
+Search terms for code discovery:
+- [primary_term], [synonym1], [synonym2]
+- [related_concept], [database_tables]
+- [api_endpoints]
+
+## Existing System Links
+
+**[Area 1]**:
+- Entry point: `path/to/file.ext` (lines X-Y, description)
+- Related: `path/to/related.ext`
+
+**Patterns to follow**:
+- [Pattern name]: `path/to/example.ext` (lines X-Y)
+
+## Requirements
+
+1. [Requirement 1]
+2. [Requirement 2]
+3. [Requirement 3]
+
+## Constraints
+
+**Must follow**:
+- [Pattern/convention to follow]
+
+**Must avoid**:
+- [Anti-pattern to avoid]
+
+## Non-Goals
+
+Out of scope for this iteration:
+- [Thing to defer]
+- [Related feature to ignore]
+
+## Success Criteria
+
+- [ ] [Measurable criterion 1]
+- [ ] [Measurable criterion 2]
+'''
+    path.write_text(content)
+
+
+def create_default_plan(path: Path):
+    """Create default plan template."""
+    content = '''# Implementation Plan
+
+**Spec**: DARKZLOOP_SPEC.md
+**Status**: Not Started
+
+## Tasks
+
+- [ ] **Task 1**: [Brief description]
+  - Modify: `path/to/file.ext` (lines X-Y, section description)
+  - Reference: DARKZLOOP_SPEC.md section N
+  - Pattern: `path/to/similar.ext`
+  - Acceptance: [How to verify]
+
+- [ ] **Task 2**: [Brief description]
+  - New file: `path/to/new_file.ext`
+  - Reference: DARKZLOOP_SPEC.md section N
+  - Tests: Create `tests/path/test.ext`
+  - Acceptance: [Verification method]
+
+## Completion Log
+
+| Task | Status | Completed | Commit |
+|------|--------|-----------|--------|
+| 1    | ⏸️     |           |        |
+| 2    | ⏸️     |           |        |
+'''
+    path.write_text(content)
+
+
+def cmd_spec(args):
+    """Create or edit the spec."""
+    spec_path = Path.cwd() / "DARKZLOOP_SPEC.md"
+    
+    if not spec_path.exists():
+        print(f"{color('Creating new spec...', Colors.BLUE)}")
+        create_default_spec(spec_path)
+    
+    editor = os.environ.get("EDITOR", "vim")
+    
+    if args.edit or not spec_path.exists():
+        subprocess.run([editor, str(spec_path)])
+    else:
+        print(f"Spec: {color(str(spec_path), Colors.CYAN)}")
+        print(f"Use {color('darkzloop spec --edit', Colors.CYAN)} to edit")
+        print()
+        print("Or use your AI agent to help create the spec interactively:")
+        print(f"  {color('\"Help me create a darkzloop spec for [your feature]\"', Colors.YELLOW)}")
+
+
+def cmd_plan(args):
+    """Create or edit the plan."""
+    plan_path = Path.cwd() / "DARKZLOOP_PLAN.md"
+    
+    if not plan_path.exists():
+        print(f"{color('Creating new plan...', Colors.BLUE)}")
+        create_default_plan(plan_path)
+    
+    editor = os.environ.get("EDITOR", "vim")
+    
+    if args.edit or not plan_path.exists():
+        subprocess.run([editor, str(plan_path)])
+    else:
+        print(f"Plan: {color(str(plan_path), Colors.CYAN)}")
+        print(f"Use {color('darkzloop plan --edit', Colors.CYAN)} to edit")
+        print()
+        print("Or use your AI agent to generate the plan from your spec:")
+        print(f"  {color('\"Generate a darkzloop plan from my spec\"', Colors.YELLOW)}")
+
+
+def cmd_status(args):
+    """Show current loop status."""
+    project_dir = Path.cwd()
+    
+    print(f"\n{color('📊 Darkzloop Status', Colors.BOLD)}\n")
+    
+    # Check files exist
+    files = {
+        "Config": project_dir / "darkzloop.json",
+        "Spec": project_dir / "DARKZLOOP_SPEC.md",
+        "Plan": project_dir / "DARKZLOOP_PLAN.md",
+    }
+    
+    for name, path in files.items():
+        status = color("✅", Colors.GREEN) if path.exists() else color("❌", Colors.RED)
+        print(f"  {status} {name}: {path.name}")
+    
+    # Parse plan for progress
+    plan_path = files["Plan"]
+    if plan_path.exists():
+        content = plan_path.read_text()
+        total = content.count("- [ ]") + content.count("- [x]")
+        done = content.count("- [x]")
+        
+        print(f"\n  Progress: {color(f'{done}/{total} tasks', Colors.CYAN)}")
+        
+        if total > 0:
+            pct = int((done / total) * 100)
+            bar_len = 20
+            filled = int(bar_len * done / total)
+            bar = "█" * filled + "░" * (bar_len - filled)
+            print(f"  [{bar}] {pct}%")
+    
+    print()
+
+
+def cmd_validate(args):
+    """Validate spec and plan quality."""
+    project_dir = Path.cwd()
+    issues = []
+    
+    print(f"\n{color('🔍 Validating...', Colors.BOLD)}\n")
+    
+    # Check spec
+    spec_path = project_dir / "DARKZLOOP_SPEC.md"
+    if not spec_path.exists():
+        issues.append("Missing DARKZLOOP_SPEC.md")
+    else:
+        content = spec_path.read_text().lower()
+        if "keywords" not in content and "synonyms" not in content:
+            issues.append("Spec missing Keywords/Synonyms section (helps search)")
+        if "existing system" not in content and "links" not in content:
+            issues.append("Spec missing Existing System Links (prevents invention)")
+        if "non-goals" not in content:
+            issues.append("Spec missing Non-Goals (prevents scope creep)")
+        
+        if "keywords" in content:
+            print(f"  {color('✅', Colors.GREEN)} Spec has keywords for search")
+        if "existing" in content:
+            print(f"  {color('✅', Colors.GREEN)} Spec links to existing code")
+        if "non-goals" in content:
+            print(f"  {color('✅', Colors.GREEN)} Spec defines non-goals")
+
+    # Check plan
+    plan_path = project_dir / "DARKZLOOP_PLAN.md"
+    if not plan_path.exists():
+        issues.append("Missing DARKZLOOP_PLAN.md")
+    else:
+        content = plan_path.read_text()
+        
+        # Check for linkage patterns
+        has_file_refs = "Modify:" in content or "New file:" in content
+        has_line_refs = "lines" in content.lower() or "(line" in content.lower()
+        has_spec_refs = "DARKZLOOP_SPEC" in content or "Reference:" in content
+        has_patterns = "Pattern:" in content
+        
+        if has_file_refs:
+            print(f"  {color('✅', Colors.GREEN)} Plan has file references")
+        else:
+            issues.append("Plan missing file references (add 'Modify:' or 'New file:')")
+        
+        if has_line_refs:
+            print(f"  {color('✅', Colors.GREEN)} Plan has line range references")
+        else:
+            issues.append("Plan missing line ranges (helps agent find right code)")
+        
+        if has_spec_refs:
+            print(f"  {color('✅', Colors.GREEN)} Plan references spec sections")
+        else:
+            issues.append("Plan should reference spec sections")
+        
+        if has_patterns:
+            print(f"  {color('✅', Colors.GREEN)} Plan references pattern files")
+
+    print()
+    
+    if issues:
+        print(f"{color('Issues found:', Colors.YELLOW)}")
+        for issue in issues:
+            print(f"  ⚠️  {issue}")
+    else:
+        print(f"{color('✅ Validation passed!', Colors.GREEN)}")
+    
+    print()
+    return len(issues) == 0
+
+
+def cmd_graph(args):
+    """Visualize loop state."""
+    project_dir = Path.cwd()
+    state_file = project_dir / ".darkzloop" / "state.json"
+    
+    # Try to load state
+    if state_file.exists():
+        with open(state_file) as f:
+            state_data = json.load(f)
+    else:
+        # Create demo state from plan
+        plan_path = project_dir / "DARKZLOOP_PLAN.md"
+        if plan_path.exists():
+            content = plan_path.read_text()
+            
+            # Parse tasks
+            import re
+            completed = re.findall(r'-\s*\[x\]\s*\*\*(?:Task\s+)?(\d+\.\d+)\*\*', content, re.IGNORECASE)
+            pending = re.findall(r'-\s*\[\s*\]\s*\*\*(?:Task\s+)?(\d+\.\d+)\*\*', content, re.IGNORECASE)
+            
+            state_data = {
+                "fsm": {"current_state": "plan" if not completed else "checkpoint", "iteration": len(completed)},
+                "completed_tasks": completed,
+                "failed_tasks": [],
+                "current_task": pending[0] if pending else None,
+                "pending_tasks": pending[1:] if len(pending) > 1 else [],
+            }
+        else:
+            print(f"{color('No state found.', Colors.YELLOW)} Run `darkzloop run` first or create a plan.")
+            return 1
+    
+    # Generate visualization
+    format_type = args.format
+    output_path = Path(args.output) if args.output else None
+    
+    if format_type == "ascii":
+        output = generate_ascii_graph(state_data)
+    elif format_type == "mermaid":
+        output = generate_mermaid_graph(state_data)
+    elif format_type == "html":
+        mermaid = generate_mermaid_graph(state_data)
+        output = generate_html_graph(mermaid)
+    elif format_type == "png":
+        if not output_path:
+            output_path = project_dir / "darkzloop-status.png"
+        mermaid = generate_mermaid_dag(state_data)
+        success = generate_png_graph(mermaid, output_path)
+        if success:
+            print(f"PNG saved to: {output_path}")
+        else:
+            print(f"{color('Failed to generate PNG.', Colors.RED)}")
+            print("Install mermaid-cli: npm install -g @mermaid-js/mermaid-cli")
+        return 0 if success else 1
+    else:
+        output = "Unknown format"
+    
+    if output_path:
+        output_path.write_text(output)
+        print(f"Saved to: {output_path}")
+    else:
+        print(output)
+    
+    return 0
+
+
+def generate_ascii_graph(state: dict) -> str:
+    """Generate ASCII visualization."""
+    fsm = state.get("fsm", {})
+    current_state = fsm.get("current_state", "init")
+    iteration = fsm.get("iteration", 0)
+    completed = state.get("completed_tasks", [])
+    failed = state.get("failed_tasks", [])
+    current = state.get("current_task")
+    pending = state.get("pending_tasks", [])
+    
+    lines = [
+        "╔══════════════════════════════════════════════════════════════╗",
+        "║                    DARKZLOOP STATUS                          ║",
+        "╠══════════════════════════════════════════════════════════════╣",
+        f"║  Iteration: {iteration:<5}  State: {current_state:<12}              ║",
+        "╠══════════════════════════════════════════════════════════════╣",
+    ]
+    
+    # State machine line
+    states = ["init", "plan", "exec", "obs", "crit", "chkpt", "done"]
+    state_map = {"execute": "exec", "observe": "obs", "critique": "crit", 
+                 "checkpoint": "chkpt", "complete": "done"}
+    display_state = state_map.get(current_state, current_state[:4])
+    
+    state_line = "║  "
+    for s in states:
+        if s == display_state or (s == current_state[:4]):
+            state_line += f"[{s.upper()}]"
+        else:
+            state_line += f" {s} "
+        if s != "done":
+            state_line += "→"
+    state_line = state_line[:62].ljust(62) + "║"
+    lines.append(state_line)
+    
+    lines.append("╠══════════════════════════════════════════════════════════════╣")
+    lines.append("║  TASKS                                                       ║")
+    
+    # Show last 5 completed
+    for task_id in completed[-5:]:
+        task_line = f"║    ✅ {task_id}"
+        lines.append(task_line.ljust(63) + "║")
+    
+    # Show current
+    if current:
+        task_line = f"║    ⏳ {current}"
+        lines.append(task_line.ljust(63) + "║")
+    
+    # Show next 3 pending
+    for task_id in pending[:3]:
+        task_line = f"║    ⏸  {task_id}"
+        lines.append(task_line.ljust(63) + "║")
+    
+    if len(pending) > 3:
+        lines.append(f"║    ... and {len(pending) - 3} more".ljust(63) + "║")
+    
+    lines.append("╠══════════════════════════════════════════════════════════════╣")
+    summary = f"║  ✅ {len(completed)} complete  ❌ {len(failed)} failed  ⏸ {len(pending)} pending"
+    lines.append(summary.ljust(63) + "║")
+    lines.append("╚══════════════════════════════════════════════════════════════╝")
+    
+    return "\n".join(lines)
+
+
+def generate_mermaid_graph(state: dict) -> str:
+    """Generate Mermaid visualization."""
+    fsm = state.get("fsm", {})
+    current_state = fsm.get("current_state", "init")
+    iteration = fsm.get("iteration", 0)
+    completed = state.get("completed_tasks", [])
+    failed = state.get("failed_tasks", [])
+    current = state.get("current_task")
+    pending = state.get("pending_tasks", [])
+    
+    lines = [
+        "# Darkzloop Status",
+        f"**Iteration:** {iteration} | **State:** `{current_state}`",
+        "",
+        "## Task Progress",
+        "```mermaid",
+        "flowchart TD",
+    ]
+    
+    all_tasks = completed + (failed or []) + ([current] if current else []) + pending
+    
+    for task_id in all_tasks:
+        node_id = task_id.replace(".", "_")
+        if task_id in completed:
+            lines.append(f"    {node_id}[✅ {task_id}]:::complete")
+        elif task_id in (failed or []):
+            lines.append(f"    {node_id}[❌ {task_id}]:::failed")
+        elif task_id == current:
+            lines.append(f"    {node_id}[⏳ {task_id}]:::current")
+        else:
+            lines.append(f"    {node_id}[⏸ {task_id}]:::pending")
+    
+    # Add sequential edges
+    for i in range(len(all_tasks) - 1):
+        from_node = all_tasks[i].replace(".", "_")
+        to_node = all_tasks[i + 1].replace(".", "_")
+        lines.append(f"    {from_node} --> {to_node}")
+    
+    lines.extend([
+        "",
+        "    classDef complete fill:#90EE90,stroke:#228B22",
+        "    classDef failed fill:#FF6B6B,stroke:#DC143C",
+        "    classDef current fill:#FFD700,stroke:#FFA500,stroke-width:3px",
+        "    classDef pending fill:#E0E0E0,stroke:#808080",
+        "```",
+        "",
+        f"**Summary:** ✅ {len(completed)} | ❌ {len(failed)} | ⏸ {len(pending)}",
+    ])
+    
+    return "\n".join(lines)
+
+
+def generate_mermaid_dag(state: dict) -> str:
+    """Generate just the Mermaid DAG (no markdown wrapper)."""
+    completed = state.get("completed_tasks", [])
+    failed = state.get("failed_tasks", [])
+    current = state.get("current_task")
+    pending = state.get("pending_tasks", [])
+    
+    lines = ["flowchart TD"]
+    
+    all_tasks = completed + (failed or []) + ([current] if current else []) + pending
+    
+    for task_id in all_tasks:
+        node_id = task_id.replace(".", "_")
+        if task_id in completed:
+            lines.append(f"    {node_id}[{task_id}]:::complete")
+        elif task_id in (failed or []):
+            lines.append(f"    {node_id}[{task_id}]:::failed")
+        elif task_id == current:
+            lines.append(f"    {node_id}[{task_id}]:::current")
+        else:
+            lines.append(f"    {node_id}[{task_id}]")
+    
+    for i in range(len(all_tasks) - 1):
+        from_node = all_tasks[i].replace(".", "_")
+        to_node = all_tasks[i + 1].replace(".", "_")
+        lines.append(f"    {from_node} --> {to_node}")
+    
+    return "\n".join(lines)
+
+
+def generate_html_graph(mermaid_content: str) -> str:
+    """Generate HTML with Mermaid."""
+    return f'''<!DOCTYPE html>
+<html>
+<head>
+    <title>Darkzloop Status</title>
+    <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+    <style>
+        body {{ font-family: system-ui; max-width: 900px; margin: 40px auto; padding: 20px; background: #f5f5f5; }}
+        .card {{ background: white; padding: 20px; border-radius: 8px; margin: 20px 0; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
+        h1 {{ color: #333; }}
+        pre {{ white-space: pre-wrap; }}
+    </style>
+</head>
+<body>
+    <h1>🔄 Darkzloop Status</h1>
+    <div class="card">
+        <div class="mermaid">
+{mermaid_content.split("```mermaid")[1].split("```")[0] if "```mermaid" in mermaid_content else "flowchart TD\n    A[No data]"}
+        </div>
+    </div>
+    <script>mermaid.initialize({{startOnLoad: true}});</script>
+</body>
+</html>'''
+
+
+def generate_png_graph(mermaid_code: str, output_path: Path) -> bool:
+    """Generate PNG using mermaid-cli."""
+    import subprocess
+    import tempfile
+    
+    try:
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.mmd', delete=False) as f:
+            f.write(mermaid_code)
+            temp_path = f.name
+        
+        result = subprocess.run(
+            ['mmdc', '-i', temp_path, '-o', str(output_path)],
+            capture_output=True
+        )
+        
+        Path(temp_path).unlink()
+        return result.returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def cmd_run(args):
+    """Run the coding loop."""
+    project_dir = Path.cwd()
+    config_path = project_dir / "darkzloop.json"
+    
+    # Check prerequisites
+    required_files = ["darkzloop.json", "DARKZLOOP_SPEC.md", "DARKZLOOP_PLAN.md"]
+    for f in required_files:
+        if not (project_dir / f).exists():
+            print(f"{color('Error:', Colors.RED)} {f} not found")
+            print(f"Run {color('darkzloop init', Colors.CYAN)} first")
+            return 1
+    
+    # Load config
+    with open(config_path) as f:
+        config = json.load(f)
+    
+    mode = "unattended" if args.unattended else "attended"
+    max_iter = args.max_iterations or 100
+    
+    print(f"\n{color('🔄 Darkzloop', Colors.BOLD)}")
+    print(f"Mode: {color(mode, Colors.CYAN)}")
+    print(f"Max iterations: {color(str(max_iter), Colors.CYAN)}\n")
+    
+    if args.dry_run:
+        print(f"{color('DRY RUN - showing what would happen:', Colors.YELLOW)}\n")
+        print(f"  1. Read DARKZLOOP_SPEC.md (the pin)")
+        print(f"  2. Read DARKZLOOP_PLAN.md (find next task)")
+        print(f"  3. Execute task with your coding agent")
+        print(f"  4. Run gates: {config['commands']['test']}")
+        if config['gates'].get('require_format'):
+            print(f"  5. Format check: {config['commands']['format_check']}")
+        if config['gates'].get('require_lint'):
+            print(f"  6. Lint: {config['commands']['lint']}")
+        print(f"  7. Commit changes")
+        print(f"  8. Update plan, repeat\n")
+        return 0
+    
+    # Run the loop
+    iteration = 0
+    consecutive_failures = 0
+    max_failures = config.get("loop", {}).get("max_consecutive_failures", 3)
+    
+    while iteration < max_iter:
+        iteration += 1
+        
+        print(f"\n{color(f'═══ Iteration {iteration} ═══', Colors.BLUE)}\n")
+        
+        if mode == "attended":
+            response = input(f"Press Enter to continue (q to quit): ")
+            if response.lower() == 'q':
+                break
+        
+        # Here you would integrate with your agent
+        # For now, we show instructions
+        print(f"Run your coding agent with the prompt in {color('darkzloop-prompt.md', Colors.CYAN)}")
+        print(f"\nExample with Claude Code:")
+        print(f"  {color('claude \"$(cat darkzloop-prompt.md)\"', Colors.YELLOW)}")
+        print(f"\nExample with Aider:")
+        print(f"  {color('aider --message-file darkzloop-prompt.md', Colors.YELLOW)}")
+        
+        if mode == "attended":
+            print(f"\n{color('After agent completes:', Colors.BOLD)}")
+            result = input("Did the iteration succeed? (y/n/q): ").lower()
+            
+            if result == 'q':
+                break
+            elif result == 'y':
+                consecutive_failures = 0
+                # Run gates
+                print(f"\n{color('Running quality gates...', Colors.BLUE)}")
+                
+                test_cmd = config["commands"]["test"]
+                print(f"  Running: {test_cmd}")
+                test_result = subprocess.run(test_cmd, shell=True)
+                
+                if test_result.returncode != 0:
+                    print(f"  {color('❌ Tests failed', Colors.RED)}")
+                    consecutive_failures += 1
+                else:
+                    print(f"  {color('✅ Tests passed', Colors.GREEN)}")
+                    
+                    # Commit
+                    if config.get("loop", {}).get("auto_commit", True):
+                        subprocess.run(["git", "add", "-A"])
+                        msg = f"darkzloop iteration {iteration}"
+                        subprocess.run(["git", "commit", "-m", msg])
+                        print(f"  {color('✅ Committed', Colors.GREEN)}")
+            else:
+                consecutive_failures += 1
+        
+        if consecutive_failures >= max_failures:
+            print(f"\n{color(f'Max failures ({max_failures}) reached. Stopping.', Colors.RED)}")
+            break
+    
+    print(f"\n{color(f'Completed {iteration} iterations', Colors.GREEN)}\n")
+    return 0
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Autonomous coding loop orchestration",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  darkzloop init              Initialize in current directory
+  darkzloop spec --edit       Edit your specification
+  darkzloop plan --edit       Edit your implementation plan
+  darkzloop run --attended    Run with confirmation prompts
+  darkzloop status            Show progress
+        """
+    )
+    parser.add_argument("--version", action="version", version=f"darkzloop {__version__}")
+    
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
+    
+    # init
+    init_parser = subparsers.add_parser("init", help="Initialize darkzloop")
+    init_parser.add_argument("--force", action="store_true", help="Overwrite existing files")
+    
+    # spec
+    spec_parser = subparsers.add_parser("spec", help="Create/edit specification")
+    spec_parser.add_argument("--edit", action="store_true", help="Open in editor")
+    
+    # plan
+    plan_parser = subparsers.add_parser("plan", help="Create/edit implementation plan")
+    plan_parser.add_argument("--edit", action="store_true", help="Open in editor")
+    
+    # run
+    run_parser = subparsers.add_parser("run", help="Run the coding loop")
+    run_parser.add_argument("--attended", action="store_true", help="Confirm each iteration")
+    run_parser.add_argument("--unattended", action="store_true", help="Run autonomously")
+    run_parser.add_argument("--max-iterations", type=int, help="Maximum iterations")
+    run_parser.add_argument("--dry-run", action="store_true", help="Show what would happen")
+    
+    # status
+    subparsers.add_parser("status", help="Show current progress")
+    
+    # validate
+    subparsers.add_parser("validate", help="Validate spec and plan quality")
+    
+    # graph
+    graph_parser = subparsers.add_parser("graph", help="Visualize loop state")
+    graph_parser.add_argument(
+        "--format", "-f",
+        choices=["mermaid", "html", "png", "ascii"],
+        default="ascii",
+        help="Output format"
+    )
+    graph_parser.add_argument(
+        "--output", "-o",
+        help="Output file path (defaults to stdout)"
+    )
+    
+    args = parser.parse_args()
+    
+    if args.command == "init":
+        return cmd_init(args)
+    elif args.command == "spec":
+        return cmd_spec(args)
+    elif args.command == "plan":
+        return cmd_plan(args)
+    elif args.command == "run":
+        return cmd_run(args)
+    elif args.command == "status":
+        return cmd_status(args)
+    elif args.command == "validate":
+        return cmd_validate(args)
+    elif args.command == "graph":
+        return cmd_graph(args)
+    else:
+        parser.print_help()
+        return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

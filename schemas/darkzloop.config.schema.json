@@ -1,0 +1,532 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://darkzloop.dev/schemas/config.json",
+  "title": "darkzloop Configuration",
+  "description": "Configuration file for darkzloop autonomous coding loops",
+  "type": "object",
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Schema version",
+      "enum": ["1.0", "1.1"]
+    },
+    
+    "project": {
+      "type": "object",
+      "description": "Project metadata",
+      "properties": {
+        "name": {
+          "type": "string",
+          "description": "Project name"
+        },
+        "language": {
+          "type": "string",
+          "description": "Primary language",
+          "enum": ["rust", "typescript", "javascript", "python", "go", "java", "kotlin", "unknown"]
+        },
+        "root": {
+          "type": "string",
+          "description": "Project root directory (relative to config file)"
+        }
+      }
+    },
+    
+    "paths": {
+      "type": "object",
+      "description": "Paths to darkzloop files",
+      "properties": {
+        "spec": {
+          "type": "string",
+          "default": "DARKZLOOP_SPEC.md",
+          "description": "Path to spec file"
+        },
+        "plan": {
+          "type": "string",
+          "default": "DARKZLOOP_PLAN.md",
+          "description": "Path to plan file"
+        },
+        "prompt": {
+          "type": "string",
+          "default": "darkzloop-prompt.md",
+          "description": "Path to iteration prompt"
+        },
+        "state_dir": {
+          "type": "string",
+          "default": ".darkzloop",
+          "description": "Directory for state files"
+        }
+      }
+    },
+    
+    "commands": {
+      "type": "object",
+      "description": "Shell commands for quality gates",
+      "properties": {
+        "test": {
+          "type": "string",
+          "description": "Command to run tests (e.g., 'cargo test', 'npm test')"
+        },
+        "format_check": {
+          "type": "string",
+          "description": "Command to check formatting (e.g., 'cargo fmt --check')"
+        },
+        "format_fix": {
+          "type": "string",
+          "description": "Command to auto-fix formatting (e.g., 'cargo fmt')"
+        },
+        "lint": {
+          "type": "string",
+          "description": "Command to run linter (e.g., 'cargo clippy')"
+        },
+        "type_check": {
+          "type": "string",
+          "description": "Command for type checking (e.g., 'npx tsc --noEmit')"
+        },
+        "build": {
+          "type": "string",
+          "description": "Command to build project"
+        },
+        "security_scan": {
+          "type": "string",
+          "description": "Command for security scanning (e.g., 'cargo audit')"
+        }
+      }
+    },
+    
+    "gates": {
+      "type": "object",
+      "description": "Tiered quality gates with backpressure. Tier 1 always runs, higher tiers are optional.",
+      "properties": {
+        "tier1": {
+          "type": "object",
+          "description": "Essential gates - MUST pass. Failure = TASK_FAILURE (retryable).",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "commands": {
+              "type": "array",
+              "description": "Commands that must pass (e.g., ['cargo test', 'cargo check'])",
+              "items": { "type": "string" },
+              "default": []
+            },
+            "on_failure": {
+              "type": "string",
+              "enum": ["task_failure", "fatal_error", "blocked"],
+              "default": "task_failure",
+              "description": "What state to transition to on failure"
+            }
+          }
+        },
+        "tier2": {
+          "type": "object",
+          "description": "Quality gates - should pass. Can auto-fix. Failure = warning or retry.",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": true
+            },
+            "commands": {
+              "type": "array",
+              "description": "Quality commands (e.g., ['cargo fmt --check', 'cargo clippy'])",
+              "items": { "type": "string" },
+              "default": []
+            },
+            "auto_fix_commands": {
+              "type": "array",
+              "description": "Commands to run before failing (e.g., ['cargo fmt'])",
+              "items": { "type": "string" },
+              "default": []
+            },
+            "on_failure": {
+              "type": "string",
+              "enum": ["task_failure", "warning", "ignore"],
+              "default": "warning",
+              "description": "What to do on failure"
+            }
+          }
+        },
+        "tier3": {
+          "type": "object",
+          "description": "Safety gates - run when enabled. Failure = blocked (needs human).",
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "commands": {
+              "type": "array",
+              "description": "Safety commands (e.g., ['cargo audit', 'npm audit'])",
+              "items": { "type": "string" },
+              "default": []
+            },
+            "on_failure": {
+              "type": "string",
+              "enum": ["blocked", "warning", "fatal_error"],
+              "default": "blocked",
+              "description": "What to do on failure"
+            }
+          }
+        }
+      },
+      "examples": [
+        {
+          "tier1": {
+            "enabled": true,
+            "commands": ["cargo test", "cargo check"],
+            "on_failure": "task_failure"
+          },
+          "tier2": {
+            "enabled": true,
+            "commands": ["cargo fmt --check", "cargo clippy -- -D warnings"],
+            "auto_fix_commands": ["cargo fmt"],
+            "on_failure": "task_failure"
+          },
+          "tier3": {
+            "enabled": false,
+            "commands": ["cargo audit"],
+            "on_failure": "blocked"
+          }
+        }
+      ]
+    },
+    
+    "gates_legacy": {
+      "type": "object",
+      "description": "Legacy flat gates (deprecated, use tiered gates instead)",
+      "deprecated": true,
+      "properties": {
+        "require_tests": {
+          "type": "boolean",
+          "default": true,
+          "description": "Fail iteration if tests fail"
+        },
+        "require_format": {
+          "type": "boolean",
+          "default": false,
+          "description": "Fail iteration if format check fails"
+        },
+        "require_lint": {
+          "type": "boolean",
+          "default": false,
+          "description": "Fail iteration if linting fails"
+        },
+        "require_type_check": {
+          "type": "boolean",
+          "default": false,
+          "description": "Fail iteration if type check fails"
+        },
+        "require_build": {
+          "type": "boolean",
+          "default": false,
+          "description": "Fail iteration if build fails"
+        },
+        "require_security_scan": {
+          "type": "boolean",
+          "default": false,
+          "description": "Fail iteration if security scan fails"
+        },
+        "auto_fix_format": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-run format_fix before failing on format"
+        }
+      }
+    },
+    
+    "loop": {
+      "type": "object",
+      "description": "Loop execution settings",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["attended", "unattended"],
+          "default": "attended",
+          "description": "Execution mode"
+        },
+        "max_iterations": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1000,
+          "default": 100,
+          "description": "Maximum iterations before stopping"
+        },
+        "max_consecutive_failures": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 3,
+          "description": "Stop after N consecutive failures (global circuit breaker)"
+        },
+        "max_task_retries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "default": 3,
+          "description": "Max retries per individual task before blocking (per-task circuit breaker)"
+        },
+        "auto_commit": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically commit successful iterations"
+        },
+        "auto_push": {
+          "type": "boolean",
+          "default": false,
+          "description": "Automatically push after commits"
+        },
+        "commit_message_template": {
+          "type": "string",
+          "default": "darkzloop: {task_id} - {description}",
+          "description": "Template for commit messages"
+        }
+      }
+    },
+    
+    "context": {
+      "type": "object",
+      "description": "Context window management (token economy)",
+      "properties": {
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1000,
+          "maximum": 128000,
+          "default": 4000,
+          "description": "Target context size in tokens"
+        },
+        "max_summaries": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 50,
+          "default": 10,
+          "description": "Max iteration summaries to keep"
+        },
+        "max_recent_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 20,
+          "default": 5,
+          "description": "Max detailed steps to keep"
+        },
+        "truncate_output_at": {
+          "type": "integer",
+          "minimum": 100,
+          "maximum": 10000,
+          "default": 500,
+          "description": "Truncate raw outputs at this many chars"
+        }
+      }
+    },
+    
+    "parallel": {
+      "type": "object",
+      "description": "Parallel execution settings (DAG)",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable parallel task execution"
+        },
+        "max_parallel_tasks": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 16,
+          "default": 4,
+          "description": "Maximum tasks to run in parallel"
+        },
+        "respect_file_locks": {
+          "type": "boolean",
+          "default": true,
+          "description": "Serialize tasks that touch the same files"
+        }
+      }
+    },
+    
+    "critic": {
+      "type": "object",
+      "description": "Critic/reflection settings",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable critic validation"
+        },
+        "use_llm": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use LLM for deeper validation (costs tokens)"
+        },
+        "rules": {
+          "type": "array",
+          "description": "Custom validation rules",
+          "items": {
+            "type": "object",
+            "required": ["name", "pattern", "severity"],
+            "properties": {
+              "name": {
+                "type": "string",
+                "description": "Rule name"
+              },
+              "pattern": {
+                "type": "string",
+                "description": "Pattern to search for (blocks if found)"
+              },
+              "severity": {
+                "type": "string",
+                "enum": ["info", "warning", "error"],
+                "description": "Severity if pattern matches"
+              },
+              "message": {
+                "type": "string",
+                "description": "Message to show when pattern matches"
+              }
+            }
+          }
+        }
+      }
+    },
+    
+    "manifest": {
+      "type": "object",
+      "description": "Context manifest settings (read-before-write enforcement)",
+      "properties": {
+        "enforce_read_before_write": {
+          "type": "boolean",
+          "default": true,
+          "description": "Block writes to files that haven't been read"
+        },
+        "require_pattern_read": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require reading pattern files before writing"
+        }
+      }
+    },
+    
+    "agent": {
+      "type": "object",
+      "description": "Agent configuration",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["claude-code", "cursor", "aider", "custom"],
+          "description": "Which agent to use"
+        },
+        "command": {
+          "type": "string",
+          "description": "Custom command to invoke agent"
+        },
+        "model": {
+          "type": "string",
+          "description": "Model to use (if applicable)"
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 30,
+          "maximum": 3600,
+          "default": 300,
+          "description": "Timeout for agent execution"
+        }
+      }
+    },
+    
+    "visualization": {
+      "type": "object",
+      "description": "Visualization settings",
+      "properties": {
+        "output_format": {
+          "type": "string",
+          "enum": ["mermaid", "html", "png", "ascii"],
+          "default": "mermaid",
+          "description": "Default visualization format"
+        },
+        "auto_update": {
+          "type": "boolean",
+          "default": true,
+          "description": "Auto-update visualization after each iteration"
+        },
+        "output_path": {
+          "type": "string",
+          "description": "Where to save visualization"
+        }
+      }
+    }
+  },
+  
+  "examples": [
+    {
+      "version": "1.1",
+      "project": {
+        "name": "my-api",
+        "language": "rust"
+      },
+      "commands": {
+        "test": "cargo test",
+        "format_check": "cargo fmt --check",
+        "format_fix": "cargo fmt",
+        "lint": "cargo clippy -- -D warnings",
+        "security_scan": "cargo audit"
+      },
+      "gates": {
+        "tier1": {
+          "enabled": true,
+          "commands": ["cargo test", "cargo check"],
+          "on_failure": "task_failure"
+        },
+        "tier2": {
+          "enabled": true,
+          "commands": ["cargo fmt --check", "cargo clippy -- -D warnings"],
+          "auto_fix_commands": ["cargo fmt"],
+          "on_failure": "task_failure"
+        },
+        "tier3": {
+          "enabled": false,
+          "commands": ["cargo audit"],
+          "on_failure": "blocked"
+        }
+      },
+      "loop": {
+        "mode": "attended",
+        "max_iterations": 50,
+        "max_task_retries": 3,
+        "auto_commit": true
+      },
+      "manifest": {
+        "enforce_read_before_write": true
+      }
+    },
+    {
+      "version": "1.1",
+      "project": {
+        "name": "frontend-app",
+        "language": "typescript"
+      },
+      "commands": {
+        "test": "npm test",
+        "type_check": "npx tsc --noEmit",
+        "lint": "npm run lint",
+        "format_fix": "npm run format"
+      },
+      "gates": {
+        "tier1": {
+          "enabled": true,
+          "commands": ["npm test", "npx tsc --noEmit"],
+          "on_failure": "task_failure"
+        },
+        "tier2": {
+          "enabled": true,
+          "commands": ["npm run lint"],
+          "auto_fix_commands": ["npm run format"],
+          "on_failure": "warning"
+        }
+      },
+      "loop": {
+        "mode": "unattended",
+        "max_iterations": 100,
+        "max_task_retries": 3
+      }
+    }
+  ]
+}
