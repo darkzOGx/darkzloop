@@ -7,6 +7,17 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
+## 📖 About
+
+Darkzloop is a terminal-based agent runner that transforms **any Large Language Model** into a disciplined, autonomous software engineer. Instead of building a smarter agent, Darkzloop builds a **more disciplined one**—wrapping model outputs in a rigorous control system that prevents hallucinations, drift, and infinite loops.
+
+**Core Architecture:**
+- 🔄 **7-State FSM** — Enforced transitions through Plan → Execute → Observe → Critique → Checkpoint
+- 🧠 **Context Grounding** — Agent receives Mermaid diagrams of its own control flow every iteration  
+- ⚡ **Circuit Breakers** — Hard stop after 3 consecutive failures; no spiral of bad fixes
+- 🔍 **Auto-Detection** — Scans for Rust/Python/Node/Go and runs appropriate quality gates
+- 🔐 **BYOA (Bring Your Own Auth)** — Uses your existing CLI tools; no API keys required
+
 Darkzloop is a terminal-based agent runner that turns **any LLM** into a rigorous software engineer. Built on the **Ralph Wiggum Loop** methodology, it uses a **Finite State Machine**, **Mermaid context diagrams**, and **Circuit Breakers** to prevent hallucinations and infinite loops.
 
 **🔥 The Killer Feature: Bring Your Own Auth (BYOA)**  
