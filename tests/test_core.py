@@ -211,7 +211,7 @@ class TestExecutors:
         
         claude = get_preset("claude")
         assert claude.command == "claude"
-        assert "--print" in claude.args
+        assert "--dangerously-skip-permissions" in claude.args
 
 
 # ============================================================================

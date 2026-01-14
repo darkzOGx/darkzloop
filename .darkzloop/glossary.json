@@ -1,0 +1,60 @@
+{
+  "learned": {
+    "create": [
+      "file",
+      "files",
+      "memprofile",
+      "execfile",
+      "pth"
+    ],
+    "file": [
+      "memprofile",
+      "execfile",
+      "files",
+      "pth"
+    ],
+    "called": [
+      "file",
+      "files",
+      "memprofile",
+      "execfile",
+      "pth"
+    ],
+    "hello": [
+      "file",
+      "files",
+      "memprofile",
+      "execfile",
+      "pth"
+    ],
+    "txt": [
+      "file",
+      "files",
+      "memprofile",
+      "execfile",
+      "pth"
+    ],
+    "text": [
+      "file",
+      "files",
+      "memprofile",
+      "execfile",
+      "pth"
+    ],
+    "world": [
+      "file",
+      "files",
+      "memprofile",
+      "execfile",
+      "pth"
+    ]
+  },
+  "term_frequencies": {
+    "files": 16,
+    "execfile": 8,
+    "pth": 8,
+    "file": 7,
+    "memprofile": 8
+  },
+  "updated_at": "2026-01-13T18:23:13.876074"
+}

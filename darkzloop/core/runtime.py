@@ -802,13 +802,13 @@ Task retries: {{ task_retries }} / {{ max_retries }}
         
         if self.config.viz_format == "html":
             html = self.visualizer.get_human_view("html")
-            (output_path.with_suffix(".html")).write_text(html)
+            (output_path.with_suffix(".html")).write_text(html, encoding="utf-8")
         elif self.config.viz_format == "mermaid":
             md = self.visualizer.get_human_view("mermaid")
-            (output_path.with_suffix(".md")).write_text(md)
+            (output_path.with_suffix(".md")).write_text(md, encoding="utf-8")
         else:
             ascii_viz = self.visualizer.get_human_view("ascii")
-            (output_path.with_suffix(".txt")).write_text(ascii_viz)
+            (output_path.with_suffix(".txt")).write_text(ascii_viz, encoding="utf-8")
     
     # =========================================================================
     # State Management

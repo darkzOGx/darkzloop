@@ -1,0 +1,50 @@
+{
+  "version": "1.0",
+  "project": {
+    "name": "darkzloop",
+    "type": "python"
+  },
+  "paths": {
+    "spec": "DARKZLOOP_SPEC.md",
+    "plan": "DARKZLOOP_PLAN.md"
+  },
+  "gates": {
+    "tier1": {
+      "enabled": true,
+      "commands": [
+        "pytest"
+      ],
+      "on_failure": "task_failure"
+    },
+    "tier2": {
+      "enabled": true,
+      "commands": [
+        "ruff check .",
+        "black --check ."
+      ],
+      "auto_fix_commands": [
+        "ruff check . --fix",
+        "black ."
+      ],
+      "on_failure": "task_failure"
+    },
+    "tier3": {
+      "enabled": false,
+      "commands": [
+        "bandit -r ."
+      ],
+      "on_failure": "blocked"
+    }
+  },
+  "loop": {
+    "max_iterations": 100,
+    "max_consecutive_failures": 3,
+    "max_task_retries": 3
+  },
+  "features": {
+    "semantic_memory": true,
+    "enforce_read_before_write": true,
+    "parallel_enabled": false,
+    "auto_commit": true
+  }
+}
