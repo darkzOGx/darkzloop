@@ -415,44 +415,66 @@ def parse_plan_to_dag(plan_content: str) -> DAGExecutor:
     """
     dag = DAGExecutor()
     
-    # Pattern for tasks
-    task_pattern = r'-\s*\[\s*[x ]?\s*\]\s*\*\*(?:Task\s+)?(\d+\.\d+)\*\*:\s*(.+?)(?=\n-\s*\[|\n##|\Z)'
+    # Pattern 1: Bold ID (Legacy) - e.g. "**1.1**: Description"
+    # Pattern 2: HTML Comment ID - e.g. "Description <!-- id: 1.1 -->"
     
-    matches = re.findall(task_pattern, plan_content, re.DOTALL | re.IGNORECASE)
+    # We'll split the plan into lines/blocks to handle both
     
-    for task_id, task_block in matches:
-        # Extract files to modify/create
-        files_modify = re.findall(r'Modify:\s*`([^`]+)`', task_block)
-        files_create = re.findall(r'New file:\s*`([^`]+)`', task_block)
-        
-        # Extract dependencies (look for explicit or infer from task numbers)
-        deps = []
-        explicit_deps = re.findall(r'Dependencies?:\s*([\d\., ]+)', task_block)
-        if explicit_deps:
-            deps = [d.strip() for d in explicit_deps[0].split(',')]
-        else:
-            # Infer: task X.Y depends on X.(Y-1) if it exists
+    # First, try to find tasks with explicit bold IDs
+    bold_pattern = r'-\s*\[\s*[x ]?\s*\]\s*\*\*(?:Task\s+)?(\d+\.\d+)\*\*:\s*(.+?)(?=\n-\s*\[|\n##|\Z)'
+    bold_matches = re.findall(bold_pattern, plan_content, re.DOTALL | re.IGNORECASE)
+    
+    for task_id, task_block in bold_matches:
+        _add_node_from_match(dag, task_id, task_block, task_block)
+
+    # Next, find tasks with HTML comments (if no bold IDs found or mixed - avoid duplicates)
+    # This regex looks for: - [ ] Description <!-- id: X -->
+    comment_pattern = r'-\s*\[\s*[x ]?\s*\]\s*(.+?)<!--\s*id:\s*([a-zA-Z0-9\._-]+)\s*-->'
+    comment_matches = re.findall(comment_pattern, plan_content)
+    
+    for description, task_id in comment_matches:
+        if task_id not in dag.nodes:
+            # For comment matches, we don't capture the full block easily with finding all
+            # So we assume dependencies are also in comments or simple structure
+            # To get full block including nested bullets, we might need a more complex parse
+            # For now, we use the description as the block for extraction
+            _add_node_from_match(dag, task_id, description, description)
+            
+    return dag
+
+def _add_node_from_match(dag: DAGExecutor, task_id: str, description_text: str, full_block: str):
+    """Helper to add a node to DAG from parsed components."""
+    # Extract files to modify/create
+    files_modify = re.findall(r'Modify:\s*`([^`]+)`', full_block)
+    files_create = re.findall(r'New file:\s*`([^`]+)`', full_block)
+    
+    # Extract dependencies
+    deps = []
+    # explicit "Dependencies: 1, 2"
+    explicit_deps = re.findall(r'Dependencies?:\s*([\d\., ]+)', full_block)
+    if explicit_deps:
+        deps = [d.strip() for d in explicit_deps[0].split(',')]
+    
+    # infer from ID (X.Y -> X.Y-1)
+    if not deps and '.' in task_id:
+        try:
             parts = task_id.split('.')
             if len(parts) == 2 and int(parts[1]) > 1:
                 prev = f"{parts[0]}.{int(parts[1]) - 1}"
                 deps = [prev]
-        
-        # Get description (first line)
-        desc_match = re.match(r'\s*(.+?)(?:\n|$)', task_block)
-        description = desc_match.group(1).strip() if desc_match else task_id
-        
-        dag.add_node(
-            task_id,
-            {
-                "id": task_id,
-                "description": description,
-                "files_to_modify": files_modify,
-                "files_to_create": files_create,
-            },
-            dependencies=deps
-        )
-    
-    return dag
+        except ValueError:
+            pass
+
+    dag.add_node(
+        task_id,
+        {
+            "id": task_id,
+            "description": description_text.strip(),
+            "files_to_modify": files_modify,
+            "files_to_create": files_create,
+        },
+        dependencies=deps
+    )
 
 
 async def run_shell_command_async(

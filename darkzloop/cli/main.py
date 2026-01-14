@@ -84,7 +84,6 @@ app = typer.Typer(
     help="Darkzloop: Reliable Autonomous Coding Loops with Semantic Memory",
     add_completion=True,
     no_args_is_help=False,  # We handle no-args with interactive wizard
-    invoke_without_command=True,
 )
 
 console = Console()
@@ -94,11 +93,12 @@ console = Console()
 # Interactive Wizard (First Run / No Args)
 # =============================================================================
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main_callback(
     ctx: typer.Context,
     version: bool = typer.Option(False, "--version", "-v", help="Show version"),
 ):
+
     """
     Darkzloop: Reliable Autonomous Coding Loops
 
@@ -294,55 +294,74 @@ def _interactive_fix():
 
 def _run_fix_command(task: str, attended: bool = True):
     """Execute the fix command."""
-    # This will call the actual fix logic
-    # For now, show what would happen
+    
+    # Create a temporary plan file for this one-shot task
+    plan_path = Path("DARKZLOOP_PLAN.md")
+    
+    # If a plan already exists, back it up
+    if plan_path.exists():
+        backup_path = plan_path.with_suffix(f".bak.{int(datetime.now().timestamp())}")
+        plan_path.rename(backup_path)
+        console.print(f"[dim]Backed up existing plan to {backup_path}[/dim]")
+        
+    # Write the one-shot plan
+    plan_content = f"""# One-Shot Fix: {task}
+
+## Goal
+{task}
+
+## Tasks
+- [ ] {task} <!-- id: fix-1 -->
+"""
+    plan_path.write_text(plan_content, encoding="utf-8")
+    
     console.print(Panel(
         f"[bold]Task:[/bold] {task}\n"
-        f"[bold]Mode:[/bold] {'Attended' if attended else 'Unattended'}",
+        f"[bold]Mode:[/bold] {'Attended' if attended else 'Unattended'}\n"
+        f"[bold]Plan:[/bold] Created temporary plan",
         title="🔧 Starting Fix",
         border_style="green"
     ))
     console.print("")
-    
-    # Import and run the actual fix logic
-    # This connects to the rest of the system
-    console.print("[yellow]⚙️  Semantic expansion...[/yellow]")
-    
-    from darkzloop.core.semantic import SemanticExpander
-    expander = SemanticExpander(Path.cwd())
-    
-    # Extract terms and expand
-    terms = task.lower().split()
-    key_terms = [t for t in terms if len(t) > 3][:5]
-    
-    for term in key_terms:
-        expansion = expander.expand(term)
-        synonyms = [k for k in list(expansion.keys())[:4] if k != term]
-        if synonyms:
-            console.print(f"  [dim]{term} → {synonyms}[/dim]")
-    
-    console.print("")
-    console.print("[yellow]📂 Searching for relevant files...[/yellow]")
-    
-    matches = expander.search_files(key_terms)
-    if matches:
-        for match in matches[:5]:
-            console.print(f"  [dim]• {match.path} ({match.confidence:.0%})[/dim]")
-    else:
-        console.print("  [dim]No direct matches - will search more broadly[/dim]")
-    
-    console.print("")
-    
-    # For now, explain next steps
-    console.print("[bold green]Ready to execute![/bold green]")
-    console.print("")
-    console.print("The full execution would:")
-    console.print("  1. Generate a plan using your configured LLM")
-    console.print("  2. Execute each task with FSM control")
-    console.print("  3. Run your quality gates (tests, lints)")
-    console.print("  4. Commit the changes (if all gates pass)")
-    console.print("")
-    console.print("[dim]Full runtime integration coming in v0.7.0[/dim]")
+
+    # Initialize Runtime
+    try:
+        from darkzloop.core.runtime import DarkzloopRuntime, LoopConfig
+        
+        # Load config to get root path
+        global_config = load_config()
+        
+        # Configure the loop
+        loop_config = LoopConfig(
+            spec_path=Path("DARKZLOOP_SPEC.md"), # Might not exist, but runtime handles it
+            plan_path=plan_path,
+            project_root=Path.cwd(),
+            stop_on_failure=True,
+            enable_parallel=False, # Serial for fixes
+            max_iterations=10 # Limit one-shot bursts
+        )
+        
+        runtime = DarkzloopRuntime(loop_config)
+        
+        # Connect the agent executor
+        from darkzloop.core.agent_executor import execute_agent_task
+        runtime.set_agent_executor(execute_agent_task)
+        
+        console.print("[bold]Starting execution loop...[/bold]")
+        results = runtime.run()
+
+        # Report results
+        console.print("")
+        if results:
+            success_count = sum(1 for r in results if r.success)
+            console.print(f"[green]✓ Completed {success_count}/{len(results)} iterations[/green]")
+        else:
+            console.print("[yellow]No iterations executed[/yellow]")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error running fix:[/red] {e}")
+        # Restore backup if needed?
+        raise typer.Exit(1)
 
 
 def _interactive_plan():
@@ -576,17 +595,60 @@ def plan(
         console.print(table)
         console.print("")
     
-    # Generate plan (placeholder - would call LLM)
+    # Generate plan using Agent Executor
+    from darkzloop.core.agent_executor import run_agent_command
+    
+    plan_path = config.project_root / config.local_config.plan_path
+    
+    console.print("[bold]🧠 Generating plan...[/bold]")
+    console.print("[dim]Consulting your configured LLM agent[/dim]")
+    
     if task:
-        console.print(f"[bold]Task:[/bold] {task}")
-        console.print("")
-        console.print("[yellow]⚠️  Plan generation requires LLM integration.[/yellow]")
-        console.print("For now, create [bold]DARKZLOOP_PLAN.md[/bold] manually.")
+        prompt = f"""
+You are an expert implementation planner.
+Goal: {task}
+
+Please create a detailed implementation plan in Markdown format.
+Format:
+# Implementation Plan
+
+## Tasks
+- [ ] Task 1 <!-- id: 1 -->
+- [ ] Task 2 <!-- id: 2 -->
+
+CRITICAL: Each task must have an <!-- id: ... --> HTML comment.
+"""
     else:
-        console.print(f"[bold]Spec:[/bold] {spec_path}")
+        spec_content = spec_path.read_text()
+        prompt = f"""
+You are an expert implementation planner.
+I have a specification file: {spec_path.name}
+
+{spec_content}
+
+Please create a detailed implementation plan based on this spec.
+Format:
+# Implementation Plan
+
+## Tasks
+- [ ] Task 1 <!-- id: 1 -->
+- [ ] Task 2 <!-- id: 2 -->
+
+CRITICAL: Each task must have an <!-- id: ... --> HTML comment.
+"""
+
+    response = run_agent_command(prompt, system_prompt="You are a senior technical architect.")
+    
+    if response:
+        plan_path.write_text(response, encoding="utf-8")
+        console.print(f"[green]✓ Plan generated:[/green] {plan_path}")
         console.print("")
-        console.print("[yellow]⚠️  Plan generation requires LLM integration.[/yellow]")
-        console.print("For now, create [bold]DARKZLOOP_PLAN.md[/bold] manually.")
+        console.print(Panel(response[:500] + "...", title="Preview", border_style="blue"))
+        console.print("")
+        console.print("Run [bold]darkzloop run[/bold] to execute this plan.")
+    else:
+        console.print("[red]❌ Failed to generate plan.[/red]")
+        console.print("Check your agent configuration with [bold]darkzloop doctor[/bold]")
 
 
 @app.command()
@@ -934,25 +996,10 @@ def fix(
 
 Generated: {datetime.now().isoformat()}
 
-## Task 1.1: Investigate Issue
+## Tasks
 
-**Description:** Understand the root cause of: "{issue}"
-
-**Files to Read:**
-{chr(10).join(f"- {f}" for f in target_files) if target_files else "- Search codebase"}
-
-**Acceptance Criteria:** Root cause identified
-
----
-
-## Task 1.2: Implement Fix
-
-**Description:** Fix the issue
-
-**Files to Modify:**
-{chr(10).join(f"- {f}" for f in target_files) if target_files else "- To be determined"}
-
-**Acceptance Criteria:** Issue resolved, tests pass
+- [ ] Investigate and understand the root cause of: "{issue}" <!-- id: 1.1 -->
+- [ ] Implement the fix{f' in: {", ".join(target_files)}' if target_files else ''} <!-- id: 1.2 -->
 """
     
     temp_plan_path = config.project_root / ".darkzloop" / "quick_plan.md"
@@ -975,20 +1022,88 @@ Generated: {datetime.now().isoformat()}
             title="Dry Run Summary",
             border_style="yellow"
         ))
-    else:
-        console.print(Panel(
-            "[green]✅ Ready to execute[/green]\n\n"
-            f"Mode: {'Unattended' if auto else 'Attended'}\n\n"
-            "Run [bold]darkzloop run[/bold] to execute, or review the generated plan first.",
-            title="Next Steps",
-            border_style="green"
-        ))
-    
-    # In a full implementation, we would:
-    # - Initialize the runtime with temp spec/plan
-    # - Set up the agent executor
-    # - Run the loop
-    # - Learn from success (update glossary)
+        return
+
+    # === EXECUTE THE FIX ===
+    console.print(Panel(
+        "[green]🚀 Starting Fix Execution[/green]\n\n"
+        f"Issue: {issue}\n"
+        f"Mode: {'Unattended' if auto else 'Attended'}",
+        title="Executing",
+        border_style="green"
+    ))
+    console.print("")
+
+    try:
+        from darkzloop.core.runtime import DarkzloopRuntime, LoopConfig
+        from darkzloop.core.executors.shell import ShellExecutor
+        from darkzloop.core.executors import ExecutorConfig, ExecutorType
+        from darkzloop.core.executors.presets import get_preset
+
+        # Configure the loop with the quick plan
+        loop_config = LoopConfig(
+            spec_path=temp_spec_path,
+            plan_path=temp_plan_path,
+            project_root=config.project_root,
+            stop_on_failure=True,
+            enable_parallel=False,
+            max_iterations=10
+        )
+        
+        runtime = DarkzloopRuntime(loop_config)
+
+        # Set up agent executor from config
+        agent_config = config.agent
+
+        if agent_config.mode == "shell":
+            preset = get_preset(agent_config.command)
+            exec_config = ExecutorConfig(
+                type=ExecutorType.SHELL,
+                command=agent_config.command,
+                args=agent_config.args if agent_config.args else (preset.args if preset else []),
+                cwd=str(config.project_root),
+            )
+            executor = ShellExecutor(exec_config)
+
+            def shell_agent_executor(context: str, task: dict) -> tuple:
+                """Execute via shell command."""
+                response = executor.execute(context)
+                if response.success:
+                    return True, response.content, None
+                else:
+                    return False, "", response.error
+
+            runtime.set_agent_executor(shell_agent_executor)
+            console.print(f"[green]✓ Agent executor configured:[/green] {agent_config.command}")
+        else:
+            console.print("[red]❌ No shell executor configured.[/red]")
+            console.print("Run [bold]darkzloop doctor[/bold] to diagnose.")
+            raise typer.Exit(1)
+
+        # Run the loop
+        console.print("")
+        console.print("[bold]Starting execution loop...[/bold]")
+        results = runtime.run()
+
+        # Report results
+        console.print("")
+        if results:
+            success_count = sum(1 for r in results if r.success)
+            console.print(f"[green]✓ Completed {success_count}/{len(results)} iterations[/green]")
+            
+            # Learn vocabulary on success
+            if success_count > 0:
+                for term in terms:
+                    for file_path in target_files:
+                        expander.learn_from_success(term, file_path)
+        else:
+            console.print("[yellow]No iterations executed[/yellow]")
+
+    except Exception as e:
+        console.print(f"[red]❌ Error running fix:[/red] {e}")
+        import traceback
+        traceback.print_exc()
+        raise typer.Exit(1)
 
 
 @app.command()
