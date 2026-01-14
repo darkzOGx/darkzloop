@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Darkzloop Status - Iteration 0</title>
+    <title>Darkzloop Status - Iteration 1</title>
     <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
     <style>
         :root { --success: #90EE90; --failure: #FF6B6B; --running: #FFD700; }
@@ -32,16 +32,16 @@
 <body>
     <div class="container">
         <h1>🔄 Darkzloop Status</h1>
-        <p class="subtitle">Iteration 0 • State: <strong>INIT</strong></p>
+        <p class="subtitle">Iteration 1 • State: <strong>CHECKPOINT</strong></p>
         
         <div class="stats-grid">
-            <div class="stat-card complete"><div class="stat-value">1</div><div class="stat-label">Completed</div></div>
+            <div class="stat-card complete"><div class="stat-value">2</div><div class="stat-label">Completed</div></div>
             <div class="stat-card failed"><div class="stat-value">0</div><div class="stat-label">Failed</div></div>
-            <div class="stat-card running"><div class="stat-value">0</div><div class="stat-label">Iterations</div></div>
-            <div class="stat-card"><div class="stat-value">1</div><div class="stat-label">Pending</div></div>
+            <div class="stat-card running"><div class="stat-value">1</div><div class="stat-label">Iterations</div></div>
+            <div class="stat-card"><div class="stat-value">0</div><div class="stat-label">Pending</div></div>
         </div>
         
-        <div class="progress-bar"><div class="progress-fill" style="width: 50%"></div></div>
+        <div class="progress-bar"><div class="progress-fill" style="width: 100%"></div></div>
         
         <div class="card"><h2>📊 Task DAG</h2><div class="mermaid">flowchart TD
 
@@ -55,16 +55,16 @@
     classDef running fill:#FFD700,stroke:#FFA500,stroke-width:3px
     classDef blocked fill:#D3D3D3,stroke:#808080,stroke-width:2px,stroke-dasharray: 5 5
     classDef pending fill:#E8E8E8,stroke:#888888
-    class 1_1 complete</div></div>
+    class 1_1,1_2 complete</div></div>
         <div class="card"><h2>🔀 State Machine</h2><div class="mermaid">stateDiagram-v2
     direction LR
 
-    init: 🔵 INIT
+    init: INIT
     plan: PLAN
     execute: EXECUTE
     observe: OBSERVE
     critique: CRITIQUE
-    checkpoint: CHECKPOINT
+    checkpoint: 🔵 CHECKPOINT
     complete: COMPLETE
     task_failure: RETRY
     fatal_error: FATAL
@@ -82,12 +82,11 @@
     checkpoint --> complete
     task_failure --> plan
     task_failure --> fatal_error</div></div>
-        <div class='card'><h2>🤖 Agent View</h2><div class='agent-view'>[LOOP] state=init iter=0 fails=0
-[STATS] ✓1 ✗0 ◷1 ⊘0
+        <div class='card'><h2>🤖 Agent View</h2><div class='agent-view'>[LOOP] state=checkpoint iter=1 fails=0
+[STATS] ✓2 ✗0 ◷0 ⊘0
 [DAG]
   [] --> [✓1.1]
-  [1.1] --> [○1.2]
-[READY] ['1.2']</div></div>
+  [1.1] --> [✓1.2]</div></div>
     </div>
     <script>mermaid.initialize({ startOnLoad: true, theme: 'default' });</script>
 </body>

@@ -1,6 +1,6 @@
 [project]
 name = "darkzloop"
-version = "0.6.0"
+version = "0.8.0"
 description = "Reliable. Autonomous. Model-Agnostic. Turn any LLM into a disciplined software engineer."
 readme = "README.md"
 license = {text = "MIT"}
@@ -109,7 +109,7 @@ dev = [
 ]
 
 [project.scripts]
-darkzloop = "darkzloop.cli.main:app"
+darkzloop = "darkzloop.cli.main:cli"
 
 [project.urls]
 Homepage = "https://github.com/darkzloop/darkzloop"
