@@ -23,6 +23,8 @@ import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm
+from rich.table import Table
+from rich.box import ROUNDED
 
 from darkzloop.cli.detection import detect_configuration, ProjectConfig
 
@@ -344,6 +346,9 @@ def execute_task(
     
     console.print()
     
+    # Initialize results for session summary
+    results = {"success": 0, "failed": 0}
+    
     # Parallel mode: auto-detect files and process in parallel
     if workers > 1:
         from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
@@ -409,11 +414,90 @@ def execute_task(
             console.print(f"\n[bold]Results:[/bold]")
             console.print(f"  [green]✓ Success:[/green] {results['success']}")
             console.print(f"  [red]✗ Failed:[/red] {results['failed']}")
+            total = results['success'] + results['failed']
+            if total > 0:
+                rate = (results['success'] / total) * 100
+                console.print(f"  [cyan]Success Rate:[/cyan] {rate:.1f}%")
             success = results["failed"] == 0
     else:
         # Standard single-threaded mode
         success = run_loop(task, backend_cmd, backend_args, config)
     
+    # Session Summary: Show all changes made with premium styling
+    console.print()
+    console.print(Panel.fit(
+        "[bold white]📊 SESSION SUMMARY[/bold white]",
+        border_style="cyan",
+        padding=(0, 2)
+    ))
+    
+    # Get git changes
+    changed_files = []
+    try:
+        # Check for unstaged changes first
+        diff_result = subprocess.run(
+            ["git", "diff", "--name-only"],
+            capture_output=True, text=True, cwd=Path.cwd(),
+            encoding='utf-8', errors='replace'
+        )
+        if diff_result.stdout.strip():
+            changed_files = diff_result.stdout.strip().split('\n')
+        
+        # Also check staged changes
+        diff_staged = subprocess.run(
+            ["git", "diff", "--staged", "--name-only"],
+            capture_output=True, text=True, cwd=Path.cwd(),
+            encoding='utf-8', errors='replace'
+        )
+        if diff_staged.stdout.strip():
+            changed_files.extend(diff_staged.stdout.strip().split('\n'))
+        
+        changed_files = list(set(changed_files))  # Remove duplicates
+    except Exception:
+        pass
+    
+    # Build stats table
+    stats_table = Table(box=ROUNDED, show_header=False, border_style="dim")
+    stats_table.add_column("Metric", style="cyan")
+    stats_table.add_column("Value", style="white")
+    
+    if workers > 1:
+        total = results.get('success', 0) + results.get('failed', 0)
+        success_count = results.get('success', 0)
+        failed_count = results.get('failed', 0)
+        rate = (success_count / total * 100) if total > 0 else 0
+        
+        # ASCII progress bar for success rate
+        bar_width = 20
+        filled = int(bar_width * rate / 100)
+        bar = "█" * filled + "░" * (bar_width - filled)
+        
+        stats_table.add_row("Files Processed", str(total))
+        stats_table.add_row("✓ Successful", f"[green]{success_count}[/green]")
+        stats_table.add_row("✗ Failed", f"[red]{failed_count}[/red]")
+        stats_table.add_row("Success Rate", f"[cyan]{bar}[/cyan] {rate:.1f}%")
+    
+    stats_table.add_row("Files Changed", str(len(changed_files)) if changed_files else "0")
+    
+    console.print(stats_table)
+    
+    # Show changed files in a nice table
+    if changed_files:
+        console.print()
+        files_table = Table(title="[bold]Modified Files[/bold]", box=ROUNDED, border_style="green")
+        files_table.add_column("#", style="dim", width=4)
+        files_table.add_column("File", style="white")
+        files_table.add_column("Status", style="green", width=10)
+        
+        for i, f in enumerate(changed_files[:15], 1):  # Show max 15 files
+            files_table.add_row(str(i), f, "Modified")
+        
+        if len(changed_files) > 15:
+            files_table.add_row("...", f"[dim]+{len(changed_files) - 15} more[/dim]", "")
+        
+        console.print(files_table)
+    
+    console.print()
     if success:
         console.print("\n[bold green]✓ Done![/bold green]")
     else:
