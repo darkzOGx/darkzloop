@@ -301,8 +301,9 @@ def execute_task(
     backend: Optional[str] = None,
     unattended: bool = False,
     no_gates: bool = False,
+    workers: int = 1,
 ):
-    """Execute a task."""
+    """Execute a task. If workers > 1, uses parallel batch processing."""
     # Auto-detect project
     config = detect_configuration()
     
@@ -343,8 +344,75 @@ def execute_task(
     
     console.print()
     
-    # Run
-    success = run_loop(task, backend_cmd, backend_args, config)
+    # Parallel mode: auto-detect files and process in parallel
+    if workers > 1:
+        from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
+        
+        # Find source files
+        extensions = {
+            "python": ["*.py"],
+            "node": ["*.js", "*.ts", "*.jsx", "*.tsx"],
+            "rust": ["*.rs"],
+            "go": ["*.go"],
+        }.get(config.type, ["*.py", "*.js", "*.ts"])
+        
+        files = []
+        for ext in extensions:
+            files.extend(glob.glob(f"**/{ext}", recursive=True))
+        
+        # Filter out common non-source directories
+        files = [f for f in files if not any(x in f for x in ['node_modules', '__pycache__', '.git', 'venv', '.venv', 'dist', 'build'])]
+        
+        if not files:
+            console.print("[yellow]No source files found for parallel processing[/yellow]")
+            console.print("[dim]Falling back to single-threaded mode...[/dim]")
+            success = run_loop(task, backend_cmd, backend_args, config)
+        else:
+            console.print(f"[bold]⚡ Parallel Mode: {len(files)} files with {workers} workers[/bold]\n")
+            
+            cwd = Path.cwd()
+            results = {"success": 0, "failed": 0}
+            
+            def process_file(filepath: str) -> Tuple[str, bool, str]:
+                try:
+                    prompt = f"Fix this file: {filepath}\nTask: {task}\nMake targeted fixes."
+                    success, output = run_agent(backend_cmd, backend_args, prompt, cwd)
+                    return filepath, success, output[:100] if output else ""
+                except Exception as e:
+                    return filepath, False, str(e)
+            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                TaskProgressColumn(),
+                console=console
+            ) as progress:
+                task_id = progress.add_task("[cyan]Darkz Looping...", total=len(files))
+                
+                with ThreadPoolExecutor(max_workers=workers) as executor:
+                    futures = {executor.submit(process_file, f): f for f in files}
+                    
+                    for future in as_completed(futures):
+                        filepath, ok, _ = future.result()
+                        filename = os.path.basename(filepath)
+                        
+                        if ok:
+                            results["success"] += 1
+                            progress.console.print(f"  [green]✓[/green] {filename}")
+                        else:
+                            results["failed"] += 1
+                            progress.console.print(f"  [red]✗[/red] {filename}")
+                        
+                        progress.advance(task_id)
+            
+            console.print(f"\n[bold]Results:[/bold]")
+            console.print(f"  [green]✓ Success:[/green] {results['success']}")
+            console.print(f"  [red]✗ Failed:[/red] {results['failed']}")
+            success = results["failed"] == 0
+    else:
+        # Standard single-threaded mode
+        success = run_loop(task, backend_cmd, backend_args, config)
     
     if success:
         console.print("\n[bold green]✓ Done![/bold green]")
@@ -363,9 +431,10 @@ def run_cmd(
     backend: Optional[str] = typer.Option(None, "--backend", "-b", help="LLM backend"),
     unattended: bool = typer.Option(False, "--unattended", "-y", help="Skip prompts"),
     no_gates: bool = typer.Option(False, "--no-gates", help="Skip quality gates"),
+    workers: int = typer.Option(1, "--workers", "-w", help="Parallel workers (auto-detects files)"),
 ):
     """🚀 Run a task."""
-    execute_task(task, backend, unattended, no_gates)
+    execute_task(task, backend, unattended, no_gates, workers)
 
 
 @app.command("doctor")
